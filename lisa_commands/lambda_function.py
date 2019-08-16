@@ -5,6 +5,7 @@ import logging
 import json
 from commands import get_return_text
 import request_helper as request
+import boto3
 
 def lambda_handler(data, _context):
     """

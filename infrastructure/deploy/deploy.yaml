@@ -1,0 +1,195 @@
+Parameters:
+  Prefix:
+    Type: String
+    Description: Prefix used to denote stack resources
+  GithubOAuth:
+    Type: String
+    Description: ''
+    NoEcho: true
+  GithubOwner:
+    Type: String
+    Description: Owner of the repo we want to deploy from.
+  AccountId:
+    Type: String
+    Description: Aws account id to be deployed to
+  Region:
+    Type: String
+    Description: AWS region to deploy to. e.g. us-east-2
+Resources:
+  CodePipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Prefix}-bucket
+      VersioningConfiguration:
+        Status: Enabled
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Prefix}-build-role
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "codebuild.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Policies: 
+        - PolicyName: base
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:*
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub arn:aws:logs:${Region}:${AccountId}:log-group:/aws/codebuild/${Prefix}_Build:log-stream:*
+                  - !Sub arn:aws:logs:${Region}:${AccountId}:log-group:/aws/codebuild/${Prefix}_Deploy:log-stream:*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:*
+                Resource: '*'
+        
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Prefix}-pipeline-role
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "codepipeline.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Policies: 
+        - PolicyName: base
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: '*'
+  BuildCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${Prefix}_Build
+      Description: Build the bot resources
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/golang:1.10
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref BuildRole
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: infrastructure/deploy/buildspec.yaml
+
+  DeployCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:!Sub ${Prefix}_Deploy
+      Description: Deploy the bot
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: infrastructure/deploy/deployspec.yaml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/golang:1.10
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+            - Name: CODEPIPELINE_STACK_NAME
+              Value: !Sub ${AWS::StackName}
+            - Name: BOT_NAME
+              Value: !Ref Prefix
+      ServiceRole: !Ref BuildRole
+      
+
+  DeploymentPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${Prefix}-deploy
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineBucket
+      Stages:
+        - Name: Source
+          Actions:
+              - Name: Source
+                ActionTypeId:
+                  Category: Source
+                  Owner: ThirdParty
+                  Version: 1
+                  Provider: GitHub
+                Configuration:
+                  Owner: !Ref GithubOwner
+                  Repo: slack_bot
+                  Branch: master
+                  OAuthToken: !Ref GithubOAuth
+                OutputArtifacts:
+                  - Name: github_artifacts
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: github_artifacts
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref BuildCodeBuild
+                PrimarySource: github_artifacts
+              OutputArtifacts:
+                - Name: artifacts
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              InputArtifacts:
+                - Name: github_artifacts
+                - Name: artifacts
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref DeployCodeBuild
+                PrimarySource: github_artifacts
+Outputs:
+  CodeBucket:
+    Description: Location where code artifacts will be
+    Value: !Ref CodePipelineBucket
+    Export:
+        Name: !Sub CodePipelineBucket-${AWS::StackName}
+

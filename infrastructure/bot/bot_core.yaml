@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Parameters:
+  Prefix:
+    Type: String
+    Description: Prefix used to denote stack resources
+Resources:
+  GeneralLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Prefix}-GeneralLambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: get-secrets
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: '*'
+  Dispatch:
+    Type: AWS::Serverless::Function
+    DependsOn: CleverbotTopic
+    Properties:
+      Handler: lambda
+      Role: !GetAtt GeneralLambdaRole.Arn
+      Runtime: go1.x
+      Timeout: 15
+      CodeUri: ./artifacts/lisa.zip
+      Environment:
+        Variables:
+            BOT_TOKEN: bot/slack/oauth
+            GOOGLE_API_KEY: bot/generic/keys
+      Events:
+        SlackApi:
+          Type: Api
+          Properties: 
+            Path: /slack_event
+            Method: POST

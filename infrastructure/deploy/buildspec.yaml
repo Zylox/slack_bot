@@ -1,0 +1,9 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - mkdir artifacts
+      - zip -r artifacts/lisa.zip ./lisa_commands
+artifacts:
+  files: ['**/*']
+  base-directory: artifacts # Probably some better more pythony place to put this
